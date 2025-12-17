@@ -1,25 +1,54 @@
 """
-🧠 AI-Powered Patent Data Extractor
-Uses LLM to extract patent data from HTML for maximum resilience
-Falls back to CSS selectors if LLM fails
+🤖 AI-Powered Patent Data Extractor - GROK EDITION
+Uses xAI Grok for intelligent extraction with CSS fallback
+Enhanced resilience with Grok's superior reasoning capabilities
 """
+
+import os
 import json
 import re
+import logging
 from typing import Dict, Any, List, Optional
 from bs4 import BeautifulSoup
-import anthropic
+
+logger = logging.getLogger(__name__)
+
+# Try to import xAI SDK
+try:
+    from xai_sdk import Client as GrokClient
+    from xai_sdk.chat import user, system
+    GROK_AVAILABLE = True
+except ImportError:
+    GROK_AVAILABLE = False
+    logger.warning("⚠️  xAI SDK not available - will use CSS fallback only")
 
 
 class AIPatentExtractor:
-    """Extract patent data using AI with CSS fallback"""
+    """Extract patent data using Grok AI with CSS fallback"""
     
-    def __init__(self, anthropic_api_key: Optional[str] = None):
+    def __init__(self, api_key: Optional[str] = None):
+        """
+        Initialize extractor with Grok API key
+        
+        Args:
+            api_key: xAI API key (or set XAI_API_KEY env var)
+        """
         self.client = None
-        if anthropic_api_key:
-            try:
-                self.client = anthropic.Anthropic(api_key=anthropic_api_key)
-            except Exception as e:
-                print(f"⚠️  AI extractor disabled: {e}")
+        
+        if GROK_AVAILABLE:
+            # Get API key from parameter or environment
+            key = api_key or os.getenv('XAI_API_KEY')
+            
+            if key:
+                try:
+                    self.client = GrokClient(api_key=key)
+                    logger.info("✅ Grok AI extractor initialized")
+                except Exception as e:
+                    logger.warning(f"⚠️  Failed to initialize Grok: {e}")
+            else:
+                logger.warning("⚠️  No XAI_API_KEY found - using CSS fallback only")
+        else:
+            logger.warning("⚠️  xai-sdk not installed - using CSS fallback only")
     
     def extract(self, html_content: str, patent_id: str) -> Dict[str, Any]:
         """
@@ -30,7 +59,7 @@ class AIPatentExtractor:
             patent_id: Patent number (e.g., BR112012008823B8)
             
         Returns:
-            Structured patent data
+            Structured patent data with extraction_method field
         """
         result = {
             'patent_id': patent_id,
@@ -48,185 +77,290 @@ class AIPatentExtractor:
         # Try AI extraction first
         if self.client:
             try:
-                ai_data = self._extract_with_ai(html_content, patent_id)
-                if ai_data and ai_data.get('title'):
-                    result.update(ai_data)
-                    result['extraction_method'] = 'ai'
-                    print(f"✅ AI extraction successful for {patent_id}")
+                logger.info(f"🤖 Attempting Grok AI extraction for {patent_id}")
+                ai_result = self._extract_with_grok(html_content, patent_id)
+                
+                if ai_result and ai_result.get('title'):
+                    result.update(ai_result)
+                    result['extraction_method'] = 'grok_ai'
+                    logger.info(f"✅ Grok AI extraction successful for {patent_id}")
                     return result
+                else:
+                    logger.warning(f"⚠️  Grok returned empty data, trying CSS fallback")
+            
             except Exception as e:
-                print(f"⚠️  AI extraction failed: {e}, falling back to CSS")
+                logger.warning(f"⚠️  Grok extraction failed: {e}, trying CSS fallback")
         
-        # Fallback to CSS selectors
+        # Fallback to CSS extraction
         try:
-            css_data = self._extract_with_css(html_content, patent_id)
-            result.update(css_data)
+            logger.info(f"🔧 Using CSS fallback extraction for {patent_id}")
+            css_result = self._extract_with_css(html_content, patent_id)
+            result.update(css_result)
             result['extraction_method'] = 'css_fallback'
-            print(f"✅ CSS extraction successful for {patent_id}")
+            logger.info(f"✅ CSS extraction successful for {patent_id}")
         except Exception as e:
-            print(f"❌ CSS extraction failed: {e}")
+            logger.error(f"❌ CSS extraction also failed: {e}")
             result['extraction_method'] = 'failed'
         
         return result
     
-    def _extract_with_ai(self, html_content: str, patent_id: str) -> Dict[str, Any]:
-        """Extract data using Claude API"""
+    def _extract_with_grok(self, html_content: str, patent_id: str) -> Dict[str, Any]:
+        """
+        Use Grok AI to extract patent data from HTML
         
-        # Truncate HTML to fit in context (keep important sections)
-        soup = BeautifulSoup(html_content, 'html.parser')
+        Args:
+            html_content: Full HTML content
+            patent_id: Patent ID for logging
+            
+        Returns:
+            Extracted patent data
+        """
+        # Truncate HTML to fit in context (~15KB for Grok)
+        truncated_html = self._truncate_html_for_ai(html_content)
         
-        # Extract key sections
-        meta_tags = str(soup.find('head')) if soup.find('head') else ''
-        abstract_section = str(soup.find('section', id='abstract')) if soup.find('section', id='abstract') else ''
-        similar_docs = str(soup.find('h3', id='similarDocuments')) if soup.find('h3', id='similarDocuments') else ''
-        
-        # Get inventors section
-        inventors_section = ''
-        dt_tags = soup.find_all('dt', class_='style-scope patent-result')
-        for dt in dt_tags:
-            if 'Inventor' in dt.get_text():
-                next_dd = dt.find_next('dd')
-                if next_dd:
-                    inventors_section = str(dt) + str(next_dd)
-                    break
-        
-        # Combine relevant sections
-        relevant_html = f"{meta_tags}\n{abstract_section}\n{inventors_section}\n{similar_docs[:5000]}"
-        
-        prompt = f"""Extract patent information from this Google Patents HTML fragment.
+        # Build prompt for Grok
+        prompt = f"""Extract patent data from the following Google Patents HTML and return ONLY a JSON object (no markdown, no backticks, no explanation).
 
 Patent ID: {patent_id}
 
-HTML:
-{relevant_html[:15000]}
+Required fields:
+- title: Patent title in English (string)
+- abstract: Full abstract in English only, not Portuguese (string)
+- inventors: ALL inventor names as array of strings (e.g., ["Name1", "Name2", ...])
+- assignee: Company or organization name (string)
+- filing_date: Filing date in YYYY-MM-DD format (string)
+- publication_date: Publication date in YYYY-MM-DD format (string)
+- family_members: Array of related BR patents with patent_number, title, country (array of objects)
 
-Extract and return ONLY a JSON object with this exact structure (no markdown, no explanations):
+Important:
+1. Extract ALL inventors, not just the first few
+2. Abstract should be in English only (ignore Portuguese translations)
+3. For family_members, prioritize BR patents and include up to 20
+4. Return ONLY the JSON, no markdown formatting
 
-{{
-  "title": "patent title",
-  "abstract": "patent abstract text (in English if available)",
-  "inventors": ["inventor1", "inventor2"],
-  "assignee": "company name",
-  "filing_date": "YYYY-MM-DD",
-  "publication_date": "YYYY-MM-DD",
-  "family_members": [
-    {{"publication_number": "BR...", "title": "...", "publication_date": "..."}}
-  ]
-}}
+HTML excerpt:
+{truncated_html}
 
-Rules:
-1. Extract ALL inventors you find
-2. For family_members, extract patents from "Similar Documents" section, prioritizing BR patents
-3. Use English text when available
-4. Return empty strings/arrays if data not found
-5. Dates in ISO format (YYYY-MM-DD)
-"""
+Return ONLY raw JSON:"""
+
+        # Create chat and get response from Grok
+        chat = self.client.chat.create(model="grok-3")
+        chat.append(system("You are a patent data extraction specialist. Extract structured data from HTML and return ONLY valid JSON, no markdown."))
+        chat.append(user(prompt))
         
-        message = self.client.messages.create(
-            model="claude-sonnet-4-20250514",
-            max_tokens=2000,
-            messages=[{"role": "user", "content": prompt}]
-        )
+        # Sample response
+        response = chat.sample()
         
-        response_text = message.content[0].text.strip()
+        # Parse JSON from response
+        return self._parse_grok_response(response.content)
+    
+    def _parse_grok_response(self, response_text: str) -> Dict[str, Any]:
+        """
+        Parse Grok's response into structured data
         
+        Args:
+            response_text: Raw response from Grok
+            
+        Returns:
+            Parsed JSON data
+        """
         # Remove markdown code blocks if present
-        response_text = re.sub(r'```json\s*|\s*```', '', response_text)
+        cleaned = response_text.strip()
+        
+        # Remove ```json and ``` if present
+        if cleaned.startswith('```'):
+            lines = cleaned.split('\n')
+            if lines[0].startswith('```'):
+                lines = lines[1:]
+            if lines[-1].strip() == '```':
+                lines = lines[:-1]
+            cleaned = '\n'.join(lines)
         
         # Parse JSON
-        data = json.loads(response_text)
+        try:
+            data = json.loads(cleaned)
+            
+            # Ensure all required fields exist
+            result = {
+                'title': data.get('title', ''),
+                'abstract': data.get('abstract', ''),
+                'inventors': data.get('inventors', []),
+                'assignee': data.get('assignee', ''),
+                'filing_date': data.get('filing_date', ''),
+                'publication_date': data.get('publication_date', ''),
+                'family_members': data.get('family_members', []),
+                'classifications': data.get('classifications', {'cpc': [], 'ipc': []})
+            }
+            
+            return result
         
-        return data
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ Failed to parse Grok JSON response: {e}")
+            logger.debug(f"Response was: {response_text[:500]}")
+            return {}
     
-    def _extract_with_css(self, html_content: str, patent_id: str) -> Dict[str, Any]:
-        """Fallback extraction using CSS selectors"""
+    def _truncate_html_for_ai(self, html_content: str, max_size: int = 15000) -> str:
+        """
+        Truncate HTML to fit in AI context window
+        
+        Keeps most important sections:
+        - <head> (meta tags with inventor, assignee info)
+        - <section id="abstract">
+        - <h3 id="similarDocuments"> (family members)
+        
+        Args:
+            html_content: Full HTML
+            max_size: Maximum characters to keep
+            
+        Returns:
+            Truncated HTML with key sections
+        """
         soup = BeautifulSoup(html_content, 'html.parser')
         
-        data = {
-            'title': '',
-            'abstract': '',
-            'inventors': [],
-            'assignee': '',
-            'filing_date': '',
-            'publication_date': '',
-            'family_members': []
-        }
+        parts = []
         
-        # Extract title
-        title_tag = soup.find('title')
-        if title_tag:
-            title_text = title_tag.get_text()
-            # Remove patent number prefix
-            data['title'] = re.sub(r'^[A-Z]{2}\d+[A-Z]\d+\s*-\s*', '', title_text).strip()
+        # 1. Meta tags (inventors, assignee, etc.)
+        head = soup.find('head')
+        if head:
+            meta_tags = head.find_all('meta', attrs={'name': True})
+            meta_html = ''.join(str(tag) for tag in meta_tags[:50])
+            parts.append(f"<head>{meta_html}</head>")
         
-        # Extract abstract
-        abstract_tag = soup.find('abstract')
-        if abstract_tag:
-            # Get English text (after Portuguese)
-            text = abstract_tag.get_text()
-            # Try to get just English part after Portuguese
-            parts = text.split('compounds which modulate', 1)
-            if len(parts) > 1:
-                data['abstract'] = ('compounds which modulate' + parts[1]).strip()[:500]
-            else:
-                data['abstract'] = text.strip()[:500]
+        # 2. Title
+        title = soup.find('title')
+        if title:
+            parts.append(str(title))
         
-        # Extract inventors from meta tags
-        inventor_metas = soup.find_all('meta', {'name': 'DC.contributor', 'scheme': 'inventor'})
-        data['inventors'] = [tag.get('content', '') for tag in inventor_metas if tag.get('content')]
+        # 3. Abstract section
+        abstract_section = soup.find('section', id='abstract')
+        if abstract_section:
+            parts.append(str(abstract_section)[:3000])
         
-        # Extract assignee from meta tag
-        assignee_meta = soup.find('meta', {'name': 'DC.contributor', 'scheme': 'assignee'})
-        if assignee_meta:
-            data['assignee'] = assignee_meta.get('content', '')
-        
-        # Extract dates from timeline
-        date_divs = soup.find_all('div', {'date': ''})
-        for div in date_divs:
-            date_text = div.get_text().strip()
-            if date_text and re.match(r'\d{4}-\d{2}-\d{2}', date_text):
-                # First date is usually filing date
-                if not data['filing_date']:
-                    data['filing_date'] = date_text
-                # Last date could be publication date
-                data['publication_date'] = date_text
-        
-        # Extract family members (BR patents from Similar Documents)
+        # 4. Similar documents (family members)
         similar_section = soup.find('h3', id='similarDocuments')
         if similar_section:
-            table = similar_section.find_next('div', class_='tbody')
+            # Get the table after the h3
+            table = similar_section.find_next('table')
             if table:
-                rows = table.find_all('div', class_='tr')
-                for row in rows[:20]:  # Limit to 20 patents
-                    pub_num_span = row.find('span', class_='td')
-                    if pub_num_span:
-                        pub_num = pub_num_span.get_text().strip()
-                        # Only BR patents
+                parts.append(f"<h3 id='similarDocuments'>Similar Documents</h3>{str(table)[:5000]}")
+        
+        # 5. Timeline (for dates)
+        timeline = soup.find('div', class_='timeline')
+        if timeline:
+            parts.append(str(timeline)[:1000])
+        
+        # Join and truncate
+        combined = '\n'.join(parts)
+        
+        if len(combined) > max_size:
+            combined = combined[:max_size] + "...[truncated]"
+        
+        return combined
+    
+    def _extract_with_css(self, html_content: str, patent_id: str) -> Dict[str, Any]:
+        """
+        Fallback extraction using CSS selectors and BeautifulSoup
+        
+        Args:
+            html_content: Full HTML content
+            patent_id: Patent ID
+            
+        Returns:
+            Extracted patent data
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        
+        result = {}
+        
+        # Title (from <title> tag, remove patent number prefix)
+        title_tag = soup.find('title')
+        if title_tag:
+            title_text = title_tag.get_text(strip=True)
+            # Remove "BR... - " prefix
+            title_text = re.sub(r'^[A-Z]{2}\d+[A-Z]?\d*\s*-\s*', '', title_text)
+            result['title'] = title_text
+        
+        # Abstract (from <abstract> tag, English portion)
+        abstract_tag = soup.find('abstract')
+        if abstract_tag:
+            # Try to get English text (usually comes first)
+            text = abstract_tag.get_text(separator=' ', strip=True)
+            # Take first 500 chars as abstract (usually English)
+            result['abstract'] = text[:500]
+        
+        # Inventors (from meta tags)
+        inventors = []
+        inventor_metas = soup.find_all('meta', attrs={'name': 'DC.contributor', 'scheme': 'inventor'})
+        for meta in inventor_metas:
+            name = meta.get('content', '').strip()
+            if name:
+                inventors.append(name)
+        result['inventors'] = inventors
+        
+        # Assignee (from meta tag)
+        assignee_meta = soup.find('meta', attrs={'name': 'DC.contributor', 'scheme': 'assignee'})
+        if assignee_meta:
+            result['assignee'] = assignee_meta.get('content', '').strip()
+        
+        # Dates (from timeline divs)
+        dates = {}
+        timeline_divs = soup.find_all('div', attrs={'date': True})
+        for div in timeline_divs:
+            date_val = div.get('date', '')
+            label = div.get_text(strip=True).lower()
+            
+            if 'filing' in label or 'application' in label:
+                dates['filing_date'] = date_val
+            elif 'publication' in label or 'granted' in label:
+                dates['publication_date'] = date_val
+        
+        result['filing_date'] = dates.get('filing_date', '')
+        result['publication_date'] = dates.get('publication_date', '')
+        
+        # Family members (from similarDocuments table)
+        family_members = []
+        similar_h3 = soup.find('h3', id='similarDocuments')
+        if similar_h3:
+            table = similar_h3.find_next('table')
+            if table:
+                rows = table.find_all('tr')[1:]  # Skip header
+                
+                for row in rows[:20]:  # Limit to 20
+                    cells = row.find_all('td')
+                    if len(cells) >= 2:
+                        pub_num = cells[0].get_text(strip=True)
+                        title = cells[1].get_text(strip=True)
+                        
+                        # Only include BR patents
                         if pub_num.startswith('BR'):
-                            title_span = row.find_all('span', class_='td')
-                            date_span = None
-                            title_text = ''
-                            
-                            if len(title_span) >= 3:
-                                date_span = title_span[1]
-                                title_text = title_span[2].get_text().strip()
-                            
-                            data['family_members'].append({
-                                'publication_number': pub_num,
-                                'title': title_text[:200],
-                                'publication_date': date_span.get_text().strip() if date_span else ''
+                            family_members.append({
+                                'patent_number': pub_num,
+                                'title': title,
+                                'country': 'BR'
                             })
         
-        return data
+        result['family_members'] = family_members
+        result['classifications'] = {'cpc': [], 'ipc': []}
+        
+        return result
 
 
 # Singleton instance
-_extractor = None
-
+_extractor_instance = None
 
 def get_extractor(api_key: Optional[str] = None) -> AIPatentExtractor:
-    """Get or create singleton extractor instance"""
-    global _extractor
-    if _extractor is None:
-        _extractor = AIPatentExtractor(anthropic_api_key=api_key)
-    return _extractor
+    """
+    Get singleton AI extractor instance
+    
+    Args:
+        api_key: Optional xAI API key
+        
+    Returns:
+        AIPatentExtractor instance
+    """
+    global _extractor_instance
+    
+    if _extractor_instance is None:
+        _extractor_instance = AIPatentExtractor(api_key=api_key)
+    
+    return _extractor_instance

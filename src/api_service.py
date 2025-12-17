@@ -58,7 +58,7 @@ class HealthResponse(BaseModel):
     """Health check response"""
     status: str = "healthy"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    version: str = "4.0.3-AI-POWERED"
+    version: str = "4.0.3-GROK-POWERED"
 
 
 class DebugFileInfo(BaseModel):
@@ -149,7 +149,7 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     global google_patents_pool
     
-    logger.info("🚀 Starting Pharmyrus v4.0.3-AI-POWERED (Ultra Simple)...")
+    logger.info("🚀 Starting Pharmyrus v4.0.3-GROK-POWERED (Ultra Simple)...")
     
     try:
         from .crawlers.google_patents_pool import GooglePatentsCrawlerPool
@@ -176,9 +176,9 @@ async def lifespan(app: FastAPI):
 # ============================================================================
 
 app = FastAPI(
-    title="Pharmyrus v4.0.3-AI-POWERED",
+    title="Pharmyrus v4.0.3-GROK-POWERED",
     description="Patent Intelligence - Ultra Simple Version",
-    version="4.0.3-AI-POWERED",
+    version="4.0.3-GROK-POWERED",
     lifespan=lifespan
 )
 
@@ -199,7 +199,7 @@ app.add_middleware(
 async def root():
     """Root endpoint"""
     return {
-        "service": "Pharmyrus v4.0.3-AI-POWERED",
+        "service": "Pharmyrus v4.0.3-GROK-POWERED",
         "status": "operational",
         "note": "Ultra Simple - All models inline",
         "endpoints": {
@@ -213,7 +213,7 @@ async def root():
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Health check"""
-    return HealthResponse(status="healthy", version="4.0.3-AI-POWERED")
+    return HealthResponse(status="healthy", version="4.0.3-GROK-POWERED")
 
 
 @app.post("/api/v1/patent/{patent_id}", response_model=PatentDetailsResponse, tags=["Patents"])
