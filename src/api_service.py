@@ -1,67 +1,122 @@
-"""FastAPI service for Pharmyrus v4.0"""
+"""
+FastAPI Application Service - ALL IN ONE (no external models.py)
+"""
+
 import logging
-import time
-from fastapi import FastAPI, HTTPException, Path
+from typing import List, Optional, Dict, Any
+from datetime import datetime
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from contextlib import asynccontextmanager
+from pydantic import BaseModel, Field
+import os
+from pathlib import Path
 
-from .models import (
-    WODetailsResponse,
-    PatentDetailsResponse,
-    SearchRequest,
-    SearchResponse,
-    WorldwideApplication
-)
-from .crawlers import crawler_pool, google_patents_client, google_patents_pool, inpi_client
-from . import utils, config
-
-# Setup logging
-logging.basicConfig(
-    level=getattr(logging, config.LOG_LEVEL),
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
 # ============================================================================
-# Lifespan management
+# PYDANTIC MODELS (INLINE - NO SEPARATE FILE)
+# ============================================================================
+
+class PatentRequest(BaseModel):
+    """Request model for patent search"""
+    patent_id: str = Field(..., description="Patent publication number")
+
+
+class PatentFamilyMember(BaseModel):
+    """Model for a patent family member"""
+    publication_number: str
+    title: str = ""
+    country: str = ""
+    kind_code: str = ""
+    publication_date: str = ""
+    link: str = ""
+
+
+class PatentDetailsResponse(BaseModel):
+    """Response model for patent details"""
+    patent_id: str
+    success: bool
+    data: Dict[str, Any] = {}
+    family_members: List[PatentFamilyMember] = []
+    br_patents_found: int = 0
+    error: Optional[str] = None
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class HealthResponse(BaseModel):
+    """Health check response"""
+    status: str = "healthy"
+    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    version: str = "4.0.1"
+
+
+class DebugFileInfo(BaseModel):
+    """Debug file information"""
+    filename: str
+    size: int
+    created: str
+    url: str
+
+
+# ============================================================================
+# DEBUG CONFIGURATION
+# ============================================================================
+
+DEBUG_DIR = Path("/tmp/playwright_debug")
+DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================================
+# GLOBAL CRAWLER POOL
+# ============================================================================
+
+google_patents_pool = None
+
+
+# ============================================================================
+# APPLICATION LIFECYCLE
 # ============================================================================
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown events"""
-    # Startup
-    logger.info("🚀 Starting Pharmyrus v4.0...")
-    logger.info(f"  Initializing {config.CRAWLER_POOL_SIZE} WIPO crawlers...")
-    await crawler_pool.initialize()
-    logger.info("  Initializing Google Patents crawlers...")
-    await google_patents_pool.initialize()
-    logger.info("  Initializing API clients...")
-    await google_patents_client.initialize()
-    await inpi_client.initialize()
-    logger.info("✅ Pharmyrus v4.0 ready!")
+    """Application lifecycle management"""
+    global google_patents_pool
+    
+    logger.info("🚀 Starting Pharmyrus v4.0.1 (Ultra Simple)...")
+    
+    try:
+        from .crawlers.google_patents_pool import GooglePatentsCrawlerPool
+        
+        google_patents_pool = GooglePatentsCrawlerPool(pool_size=2)
+        await google_patents_pool.initialize()
+        
+        logger.info("✅ Crawler pool initialized")
+        logger.info("✅ API ready")
+        
+    except Exception as e:
+        logger.error(f"❌ Init error: {e}")
+        raise
     
     yield
     
-    # Shutdown
-    logger.info("🛑 Shutting down Pharmyrus v4.0...")
-    await crawler_pool.close()
-    await google_patents_pool.close()
-    await google_patents_client.close()
-    await inpi_client.close()
-    logger.info("✅ Shutdown complete")
+    logger.info("🔌 Shutting down...")
+    if google_patents_pool:
+        await google_patents_pool.close_all()
+
 
 # ============================================================================
-# FastAPI app
+# FASTAPI APP
 # ============================================================================
 
 app = FastAPI(
-    title="Pharmyrus v4.0",
-    description="Patent Intelligence API for Pharmaceutical Patents",
-    version="4.0.0",
+    title="Pharmyrus v4.0.1",
+    description="Patent Intelligence - Ultra Simple Version",
+    version="4.0.1",
     lifespan=lifespan
 )
 
-# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -70,282 +125,172 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Debug endpoints (for HTML/screenshot retrieval)
-try:
-    from .debug_endpoints import router as debug_router
-    app.include_router(debug_router)
-    logger.info("✅ Debug endpoints enabled at /debug/*")
-except Exception as e:
-    logger.warning(f"⚠️  Debug endpoints not loaded: {e}")
 
 # ============================================================================
-# ENDPOINT 1: WO Details (ALL countries)
+# MAIN ENDPOINTS
 # ============================================================================
 
-@app.get("/api/v1/wo/{wo_number}", response_model=WODetailsResponse)
-async def get_wo_details(
-    wo_number: str = Path(..., description="WO number (e.g., WO2011051540)")
-):
-    """
-    Get complete WO patent details including ALL worldwide applications
-    
-    This endpoint returns:
-    - WO basic info (title, abstract, assignee, dates)
-    - ALL worldwide applications (not just BR)
-    - Grouped by year
-    - Total countries count
-    """
-    start_time = time.time()
-    
-    logger.info(f"📋 REQUEST: GET /api/v1/wo/{wo_number}")
-    
-    # Normalize WO number
-    clean_wo = utils.normalize_wo_number(wo_number)
-    
-    if not utils.is_valid_wo_number(clean_wo):
-        raise HTTPException(status_code=400, detail=f"Invalid WO number format: {wo_number}")
-    
-    try:
-        # Get crawler from pool
-        crawler = crawler_pool.get_crawler()
-        
-        # Fetch WO details via WIPO Patentscope
-        logger.info(f"  🔍 Fetching WIPO data for {clean_wo}...")
-        wo_data = await crawler.get_wo_details(clean_wo)
-        
-        if not wo_data:
-            raise HTTPException(status_code=404, detail=f"WO not found: {wo_number}")
-        
-        # Parse worldwide applications
-        worldwide_apps = wo_data.get("worldwide_applications", {})
-        
-        # Convert to response format
-        applications_by_year = {}
-        all_countries = set()
-        
-        for year, apps in worldwide_apps.items():
-            applications_by_year[year] = [
-                WorldwideApplication(
-                    country_code=app.get("country_code", ""),
-                    application_number=app.get("application_number", ""),
-                    filing_date=app.get("filing_date", ""),
-                    publication_date=app.get("publication_date", ""),
-                    status=app.get("status", "")
-                )
-                for app in apps
-            ]
-            
-            # Count unique countries
-            for app in apps:
-                country = app.get("country_code", "")
-                if country:
-                    all_countries.add(country)
-        
-        duration = time.time() - start_time
-        
-        response = WODetailsResponse(
-            wo_number=clean_wo,
-            title=wo_data.get("title", ""),
-            abstract=wo_data.get("abstract", ""),
-            assignee=wo_data.get("assignee", ""),
-            filing_date=wo_data.get("filing_date", ""),
-            publication_date=wo_data.get("publication_date", ""),
-            worldwide_applications=applications_by_year,
-            total_applications=sum(len(apps) for apps in applications_by_year.values()),
-            total_countries=len(all_countries),
-            search_duration_seconds=round(duration, 2)
-        )
-        
-        logger.info(f"  ✅ Found {response.total_applications} applications in {response.total_countries} countries")
-        logger.info(f"  ⏱️  Duration: {utils.format_duration(duration)}")
-        
-        return response
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"  ❌ Error processing {wo_number}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-
-# ============================================================================
-# ENDPOINT 2: Patent Details (single patent)
-# ============================================================================
-
-@app.get("/api/v1/patent/{patent_number}", response_model=PatentDetailsResponse)
-async def get_patent_details(
-    patent_number: str = Path(..., description="Patent number (e.g., BR112012008823B8, US9376391B2)")
-):
-    """
-    Get complete details for a single patent
-    
-    This endpoint returns:
-    - Full patent info (title, abstract, claims)
-    - Dates (priority, filing, publication, grant)
-    - Parties (assignee, inventors)
-    - Legal status
-    - Family information
-    - Data from multiple sources (Google Patents + INPI if BR)
-    
-    Strategy:
-    1. Try Google Patents Playwright (direct scraping, no rate limits)
-    2. Fallback to SerpAPI if Playwright fails
-    3. Enrich with INPI data if Brazilian patent
-    """
-    start_time = time.time()
-    
-    logger.info(f"📋 REQUEST: GET /api/v1/patent/{patent_number}")
-    
-    # Clean patent number
-    clean_patent = utils.clean_patent_number(patent_number)
-    country_code = utils.extract_country_code(clean_patent)
-    
-    logger.info(f"  🌍 Country: {country_code} ({utils.get_country_name(country_code)})")
-    
-    try:
-        # Strategy 1: Try Google Patents Playwright (direct, no rate limits)
-        logger.info(f"  🔍 Fetching Google Patents data (Playwright)...")
-        gp_playwright_data = await google_patents_pool.fetch_patent(clean_patent)
-        
-        # Check if Playwright got meaningful data
-        playwright_success = (
-            gp_playwright_data.get('title') or 
-            gp_playwright_data.get('abstract') or 
-            gp_playwright_data.get('patent_family', {}).get('total_members', 0) > 0
-        )
-        
-        if playwright_success:
-            logger.info(f"  ✅ Playwright: Got data for {clean_patent}")
-            gp_data = gp_playwright_data
-            data_source = "playwright"
-        else:
-            # Strategy 2: Fallback to SerpAPI
-            logger.warning(f"  ⚠️  Playwright failed, trying SerpAPI fallback...")
-            gp_data = await google_patents_client.get_patent_details(clean_patent)
-            data_source = "serpapi"
-        
-        # Initialize sources dict
-        sources = {
-            "google_patents": {
-                "url": gp_data.get("url", f"https://patents.google.com/patent/{clean_patent}"),
-                "pdf_url": gp_data.get("pdf_url", ""),
-                "cpc_classifications": gp_data.get("classifications", {}).get("cpc", []) or gp_data.get("cpc_classifications", []),
-                "ipc_classifications": gp_data.get("classifications", {}).get("ipc", []) or gp_data.get("ipc_classifications", []),
-                "family_id": gp_data.get("family_id", ""),
-                "family_size": gp_data.get("patent_family", {}).get("total_members", 0) or gp_data.get("family_size", 0),
-                "data_source": data_source,
-                "family_countries": gp_data.get("patent_family", {}).get("countries", [])
-            }
-        }
-        
-        # If BR patent, enrich with INPI data
-        if country_code == "BR":
-            logger.info(f"  🇧🇷 Fetching INPI data...")
-            inpi_data = await inpi_client.get_patent_details(clean_patent)
-            
-            if inpi_data.get("found"):
-                sources["inpi"] = {
-                    "status": inpi_data.get("status", ""),
-                    "process_number": inpi_data.get("process_number", ""),
-                    "events": inpi_data.get("events", [])
-                }
-                logger.info(f"  ✅ INPI data enriched")
-        
-        duration = time.time() - start_time
-        
-        response = PatentDetailsResponse(
-            publication_number=clean_patent,
-            country_code=country_code,
-            priority_date=gp_data.get("priority_date", ""),
-            filing_date=gp_data.get("filing_date", ""),
-            publication_date=gp_data.get("publication_date", ""),
-            grant_date=gp_data.get("grant_date", ""),
-            title=gp_data.get("title", ""),
-            abstract=gp_data.get("abstract", ""),
-            claims=gp_data.get("claims", ""),
-            assignee=gp_data.get("assignee", ""),
-            inventors=gp_data.get("inventors", []),
-            legal_status=gp_data.get("legal_status", ""),
-            legal_status_detail=gp_data.get("legal_status", ""),
-            family_id=gp_data.get("family_id", ""),
-            wo_number="",  # Could be extracted from family
-            sources=sources,
-            search_duration_seconds=round(duration, 2)
-        )
-        
-        logger.info(f"  ✅ Patent details retrieved ({data_source})")
-        logger.info(f"  ⏱️  Duration: {utils.format_duration(duration)}")
-        
-        return response
-    
-    except Exception as e:
-        logger.error(f"  ❌ Error processing {patent_number}: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-
-# ============================================================================
-# ENDPOINT 3: Search (complete pipeline)
-# ============================================================================
-
-@app.post("/api/v1/search", response_model=SearchResponse)
-async def search_molecule(request: SearchRequest):
-    """
-    Complete patent search pipeline for a molecule
-    
-    Pipeline:
-    1. PubChem → dev codes, CAS, synonyms
-    2. WO Discovery → find WO numbers
-    3. For each WO → WIPO Crawler → worldwide applications
-    4. For each application → Google Patents → full details
-    5. For each BR → INPI → enrichment
-    6. Consolidation → final JSON (target-buscas.json format)
-    
-    This is the most comprehensive endpoint.
-    """
-    logger.info(f"📋 REQUEST: POST /api/v1/search")
-    logger.info(f"  Molecule: {request.molecule_name}")
-    logger.info(f"  Max WOs: {request.max_wos}")
-    logger.info(f"  Include INPI: {request.include_inpi}")
-    
-    try:
-        # Import orchestrator
-        from .orchestrator import search_orchestrator
-        
-        # Execute full pipeline
-        response = await search_orchestrator.execute_search(request)
-        
-        logger.info(f"  ✅ Search complete: {response.executive_summary.total_patents} patents found")
-        
-        return response
-    
-    except Exception as e:
-        logger.error(f"  ❌ Error in search pipeline: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Internal error: {str(e)}")
-
-# ============================================================================
-# Health check
-# ============================================================================
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {
-        "status": "healthy",
-        "version": "4.0.0",
-        "crawlers_ready": len(crawler_pool.crawlers),
-        "crawler_pool_size": config.CRAWLER_POOL_SIZE,
-        "serpapi_keys_available": len(config.SERPAPI_KEYS)
-    }
-
-@app.get("/")
+@app.get("/", tags=["Root"])
 async def root():
     """Root endpoint"""
     return {
-        "service": "Pharmyrus v4.0",
-        "description": "Patent Intelligence API",
+        "service": "Pharmyrus v4.0.1",
+        "status": "operational",
+        "note": "Ultra Simple - All models inline",
         "endpoints": {
-            "wo_details": "/api/v1/wo/{wo_number}",
-            "patent_details": "/api/v1/patent/{patent_number}",
-            "search": "/api/v1/search",
             "health": "/health",
-            "docs": "/docs"
+            "patent": "POST /api/v1/patent/{patent_id}",
+            "debug": "/debug/html/{patent_id}"
         }
     }
+
+
+@app.get("/health", response_model=HealthResponse, tags=["Health"])
+async def health_check():
+    """Health check"""
+    return HealthResponse(status="healthy", version="4.0.1")
+
+
+@app.post("/api/v1/patent/{patent_id}", response_model=PatentDetailsResponse, tags=["Patents"])
+async def get_patent_details(patent_id: str):
+    """Get patent details and family"""
+    global google_patents_pool
+    
+    if not google_patents_pool:
+        raise HTTPException(503, "Crawler pool not ready")
+    
+    logger.info(f"🔍 Fetching: {patent_id}")
+    
+    try:
+        result = await google_patents_pool.fetch_patent_details(patent_id)
+        
+        br_patents = [
+            m for m in result.get('family_members', [])
+            if m.get('publication_number', '').upper().startswith('BR')
+        ]
+        
+        family_members = [
+            PatentFamilyMember(**m)
+            for m in result.get('family_members', [])
+        ]
+        
+        logger.info(f"✅ Found {len(br_patents)} BR patents")
+        
+        return PatentDetailsResponse(
+            patent_id=patent_id,
+            success=result.get('success', False),
+            data=result.get('data', {}),
+            family_members=family_members,
+            br_patents_found=len(br_patents),
+            error=result.get('error')
+        )
+        
+    except Exception as e:
+        logger.error(f"❌ Error: {e}")
+        raise HTTPException(500, f"Error: {str(e)}")
+
+
+# ============================================================================
+# DEBUG ENDPOINTS
+# ============================================================================
+
+@app.get("/debug/files", tags=["Debug"])
+async def list_debug_files():
+    """List all captured HTML files"""
+    try:
+        files = []
+        for f in DEBUG_DIR.glob("*.html"):
+            stat = f.stat()
+            files.append(DebugFileInfo(
+                filename=f.name,
+                size=stat.st_size,
+                created=datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                url=f"/debug/download/{f.name}"
+            ))
+        
+        return {
+            "count": len(files),
+            "files": sorted(files, key=lambda x: x.created, reverse=True)
+        }
+    except Exception as e:
+        raise HTTPException(500, f"Error listing files: {str(e)}")
+
+
+@app.get("/debug/html/{patent_id}", response_class=HTMLResponse, tags=["Debug"])
+async def view_debug_html(patent_id: str):
+    """View captured HTML in browser"""
+    try:
+        files = list(DEBUG_DIR.glob(f"{patent_id}_*.html"))
+        
+        if not files:
+            return HTMLResponse(
+                f"<h1>No HTML captured for {patent_id}</h1>"
+                f"<p>Make a POST request first to trigger capture</p>",
+                status_code=404
+            )
+        
+        latest = max(files, key=lambda f: f.stat().st_mtime)
+        content = latest.read_text(encoding='utf-8')
+        
+        return HTMLResponse(content=content)
+        
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
+
+@app.get("/debug/download/{filename}", tags=["Debug"])
+async def download_debug_file(filename: str):
+    """Download debug HTML file"""
+    file_path = DEBUG_DIR / filename
+    
+    if not file_path.exists():
+        raise HTTPException(404, "File not found")
+    
+    return FileResponse(
+        path=str(file_path),
+        media_type="text/html",
+        filename=filename
+    )
+
+
+@app.get("/debug/latest", response_class=HTMLResponse, tags=["Debug"])
+async def view_latest_debug():
+    """View most recent captured HTML"""
+    try:
+        files = list(DEBUG_DIR.glob("*.html"))
+        
+        if not files:
+            return HTMLResponse(
+                "<h1>No HTML files captured yet</h1>",
+                status_code=404
+            )
+        
+        latest = max(files, key=lambda f: f.stat().st_mtime)
+        content = latest.read_text(encoding='utf-8')
+        
+        return HTMLResponse(content=content)
+        
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
+
+@app.delete("/debug/clean", tags=["Debug"])
+async def clean_debug_files():
+    """Delete all debug HTML files"""
+    try:
+        files = list(DEBUG_DIR.glob("*.html"))
+        deleted = 0
+        
+        for f in files:
+            f.unlink()
+            deleted += 1
+        
+        return {"deleted": deleted, "message": f"Removed {deleted} files"}
+        
+    except Exception as e:
+        raise HTTPException(500, f"Error: {str(e)}")
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8080)

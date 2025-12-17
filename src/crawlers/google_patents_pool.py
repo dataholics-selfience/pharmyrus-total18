@@ -10,6 +10,7 @@ from .google_patents_playwright import GooglePatentsCrawler
 
 logger = logging.getLogger(__name__)
 
+
 class GooglePatentsCrawlerPool:
     """
     Pool of GooglePatentsCrawler instances for parallel processing
@@ -119,6 +120,3 @@ class GooglePatentsCrawlerPool:
     def __len__(self):
         """Return number of crawlers in pool"""
         return len(self.crawlers)
-
-# Global pool instance (initialized in __init__.py)
-google_patents_pool: GooglePatentsCrawlerPool = None

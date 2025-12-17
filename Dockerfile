@@ -1,4 +1,4 @@
-# Use Playwright official base image (already has all dependencies)
+# Use Playwright official base image (already has Chromium + all dependencies)
 FROM mcr.microsoft.com/playwright/python:v1.40.0-jammy
 
 # Set working directory
