@@ -49,7 +49,7 @@ class HealthResponse(BaseModel):
     """Health check response"""
     status: str = "healthy"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    version: str = "4.0.1"
+    version: str = "4.0.2"
 
 
 class DebugFileInfo(BaseModel):
@@ -69,6 +69,62 @@ DEBUG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def remove_javascript_from_html(html_content: str) -> str:
+    """
+    Remove all JavaScript from HTML to prevent redirects and dynamic behavior
+    This allows safe viewing of captured HTML without executing scripts
+    """
+    import re
+    
+    # Remove <script> tags and their content
+    # Matches: <script>...</script> and <script src="..."></script>
+    html_content = re.sub(
+        r'<script[^>]*>.*?</script>',
+        '',
+        html_content,
+        flags=re.DOTALL | re.IGNORECASE
+    )
+    
+    # Remove inline event handlers (onclick, onload, etc)
+    html_content = re.sub(
+        r'\s+on\w+\s*=\s*["\'][^"\']*["\']',
+        '',
+        html_content,
+        flags=re.IGNORECASE
+    )
+    
+    # Remove javascript: URLs
+    html_content = re.sub(
+        r'href\s*=\s*["\']javascript:[^"\']*["\']',
+        'href="#"',
+        html_content,
+        flags=re.IGNORECASE
+    )
+    
+    # Add notice banner at the top
+    notice = """
+    <div style="background: #ff6b6b; color: white; padding: 10px; text-align: center; position: sticky; top: 0; z-index: 9999;">
+        ⚠️ <strong>DEBUG MODE:</strong> JavaScript disabled to prevent redirects | 
+        This is the captured HTML from Google Patents | 
+        <a href="/debug/download/{filename}" style="color: white; text-decoration: underline;">Download Original</a>
+    </div>
+    """
+    
+    # Insert notice after <body> tag
+    html_content = re.sub(
+        r'(<body[^>]*>)',
+        r'\1' + notice,
+        html_content,
+        flags=re.IGNORECASE
+    )
+    
+    return html_content
+
+
+# ============================================================================
 # GLOBAL CRAWLER POOL
 # ============================================================================
 
@@ -84,7 +140,7 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     global google_patents_pool
     
-    logger.info("🚀 Starting Pharmyrus v4.0.1 (Ultra Simple)...")
+    logger.info("🚀 Starting Pharmyrus v4.0.2 (Ultra Simple)...")
     
     try:
         from .crawlers.google_patents_pool import GooglePatentsCrawlerPool
@@ -111,9 +167,9 @@ async def lifespan(app: FastAPI):
 # ============================================================================
 
 app = FastAPI(
-    title="Pharmyrus v4.0.1",
+    title="Pharmyrus v4.0.2",
     description="Patent Intelligence - Ultra Simple Version",
-    version="4.0.1",
+    version="4.0.2",
     lifespan=lifespan
 )
 
@@ -134,7 +190,7 @@ app.add_middleware(
 async def root():
     """Root endpoint"""
     return {
-        "service": "Pharmyrus v4.0.1",
+        "service": "Pharmyrus v4.0.2",
         "status": "operational",
         "note": "Ultra Simple - All models inline",
         "endpoints": {
@@ -148,7 +204,7 @@ async def root():
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Health check"""
-    return HealthResponse(status="healthy", version="4.0.1")
+    return HealthResponse(status="healthy", version="4.0.2")
 
 
 @app.post("/api/v1/patent/{patent_id}", response_model=PatentDetailsResponse, tags=["Patents"])
@@ -218,7 +274,7 @@ async def list_debug_files():
 
 @app.get("/debug/html/{patent_id}", response_class=HTMLResponse, tags=["Debug"])
 async def view_debug_html(patent_id: str):
-    """View captured HTML in browser"""
+    """View captured HTML in browser (with JavaScript removed to prevent redirects)"""
     try:
         files = list(DEBUG_DIR.glob(f"{patent_id}_*.html"))
         
@@ -232,7 +288,13 @@ async def view_debug_html(patent_id: str):
         latest = max(files, key=lambda f: f.stat().st_mtime)
         content = latest.read_text(encoding='utf-8')
         
-        return HTMLResponse(content=content)
+        # ✅ REMOVE JAVASCRIPT to prevent redirects
+        clean_content = remove_javascript_from_html(content)
+        clean_content = clean_content.replace("{filename}", latest.name)
+        
+        logger.info(f"📄 Serving {patent_id} HTML without JavaScript (size: {len(clean_content)} bytes)")
+        
+        return HTMLResponse(content=clean_content)
         
     except Exception as e:
         raise HTTPException(500, f"Error: {str(e)}")
@@ -255,7 +317,7 @@ async def download_debug_file(filename: str):
 
 @app.get("/debug/latest", response_class=HTMLResponse, tags=["Debug"])
 async def view_latest_debug():
-    """View most recent captured HTML"""
+    """View most recent captured HTML (with JavaScript removed)"""
     try:
         files = list(DEBUG_DIR.glob("*.html"))
         
@@ -268,7 +330,13 @@ async def view_latest_debug():
         latest = max(files, key=lambda f: f.stat().st_mtime)
         content = latest.read_text(encoding='utf-8')
         
-        return HTMLResponse(content=content)
+        # ✅ REMOVE JAVASCRIPT to prevent redirects
+        clean_content = remove_javascript_from_html(content)
+        clean_content = clean_content.replace("{filename}", latest.name)
+        
+        logger.info(f"📄 Serving latest HTML without JavaScript: {latest.name}")
+        
+        return HTMLResponse(content=clean_content)
         
     except Exception as e:
         raise HTTPException(500, f"Error: {str(e)}")
