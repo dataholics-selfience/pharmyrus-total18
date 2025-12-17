@@ -1,11 +1,12 @@
 """
 Google Patents Playwright Crawler
-Version: v4.0 HOTFIX3.2
-Fixed: Patent family extraction with CORRECT selectors from actual HTML structure
+Version: v4.0.3 AI-POWERED
+🧠 Enhanced with AI-powered extraction for maximum resilience!
 """
 
 import logging
 import asyncio
+import os
 from typing import Dict, Any, List, Optional
 from playwright.async_api import Page, async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -399,6 +400,7 @@ class GooglePatentsPlaywrightCrawler:
     async def get_patent_details(self, patent_id: str) -> Dict[str, Any]:
         """
         Get complete patent details including family members
+        🧠 NOW WITH AI-POWERED EXTRACTION!
         
         Args:
             patent_id: Patent publication number (e.g., 'BR112012008823B8')
@@ -411,7 +413,8 @@ class GooglePatentsPlaywrightCrawler:
             'success': False,
             'data': {},
             'family_members': [],
-            'error': None
+            'error': None,
+            'extraction_method': 'unknown'
         }
         
         try:
@@ -461,19 +464,80 @@ class GooglePatentsPlaywrightCrawler:
                 
                 logger.info(f"    ✅ Page loaded: {title}")
                 
-                # Extract basic info
-                logger.info(f"    📄 Extracting basic patent info...")
-                basic_info = await self._extract_basic_info(page)
+                # 🧠 NEW: Try AI extraction first!
+                ai_success = False
+                try:
+                    from src.extractors.ai_extractor import get_extractor
+                    
+                    # Get full HTML
+                    html_content = await page.content()
+                    logger.info(f"    🧠 Attempting AI extraction...")
+                    
+                    # Get AI extractor
+                    api_key = os.environ.get('ANTHROPIC_API_KEY')
+                    extractor = get_extractor(api_key)
+                    
+                    # Extract with AI
+                    ai_data = extractor.extract(html_content, patent_id)
+                    
+                    if ai_data and ai_data.get('extraction_method') == 'ai':
+                        logger.info(f"    ✅ AI extraction SUCCESS!")
+                        
+                        # Use AI-extracted data
+                        result['data'] = {
+                            'title': ai_data.get('title', ''),
+                            'abstract': ai_data.get('abstract', ''),
+                            'inventors': ai_data.get('inventors', []),
+                            'assignee': ai_data.get('assignee', ''),
+                            'filing_date': ai_data.get('filing_date', ''),
+                            'publication_date': ai_data.get('publication_date', ''),
+                            'classifications': ai_data.get('classifications', {'cpc': [], 'ipc': []}),
+                            'pdf_url': '',
+                            'legal_status': ''
+                        }
+                        
+                        # Convert AI family members to expected format
+                        family_members = []
+                        for member in ai_data.get('family_members', []):
+                            family_members.append({
+                                'publication_number': member.get('publication_number', ''),
+                                'title': member.get('title', ''),
+                                'country': member.get('publication_number', '')[:2] if member.get('publication_number') else '',
+                                'kind_code': '',
+                                'publication_date': member.get('publication_date', ''),
+                                'link': f"https://patents.google.com/patent/{member.get('publication_number', '')}/en"
+                            })
+                        
+                        result['family_members'] = family_members
+                        result['extraction_method'] = 'ai'
+                        ai_success = True
+                        
+                        logger.info(f"    📊 AI found {len(family_members)} family members")
+                    
+                except ImportError:
+                    logger.warning("    ⚠️  AI extractor not available (import failed)")
+                except Exception as ai_err:
+                    logger.warning(f"    ⚠️  AI extraction failed: {ai_err}")
                 
-                # Extract patent family
-                logger.info(f"    👨‍👩‍👧‍👦 Extracting patent family...")
-                family_members = await self._extract_patent_family(page)
+                # Fallback to CSS extraction if AI failed
+                if not ai_success:
+                    logger.info(f"    📄 Using CSS fallback extraction...")
+                    
+                    # Extract basic info (old method)
+                    basic_info = await self._extract_basic_info(page)
+                    
+                    # Extract patent family (old method)
+                    logger.info(f"    👨‍👩‍👧‍👦 Extracting patent family...")
+                    family_members = await self._extract_patent_family(page)
+                    
+                    result['data'] = basic_info
+                    result['family_members'] = family_members
+                    result['extraction_method'] = 'css_fallback'
+                    
+                    logger.info(f"    ✅ CSS extracted {len(family_members)} family members")
                 
-                result['data'] = basic_info
-                result['family_members'] = family_members
                 result['success'] = True
-                
-                logger.info(f"    ✅ SUCCESS: Extracted {len(family_members)} family members")
+                logger.info(f"    ✅ SUCCESS using {result['extraction_method']}")
                 
             finally:
                 await page.close()

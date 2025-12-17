@@ -1,5 +1,6 @@
 """
 FastAPI Application Service - ALL IN ONE (no external models.py)
+🧠 NOW WITH AI-POWERED EXTRACTION!
 """
 
 import logging
@@ -12,6 +13,14 @@ from contextlib import asynccontextmanager
 from pydantic import BaseModel, Field
 import os
 from pathlib import Path
+
+# AI Extractor import
+try:
+    from src.extractors.ai_extractor import get_extractor
+    AI_EXTRACTION_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️  AI extraction not available: {e}")
+    AI_EXTRACTION_AVAILABLE = False
 
 logger = logging.getLogger(__name__)
 
@@ -49,7 +58,7 @@ class HealthResponse(BaseModel):
     """Health check response"""
     status: str = "healthy"
     timestamp: datetime = Field(default_factory=datetime.utcnow)
-    version: str = "4.0.2"
+    version: str = "4.0.3-AI-POWERED"
 
 
 class DebugFileInfo(BaseModel):
@@ -140,7 +149,7 @@ async def lifespan(app: FastAPI):
     """Application lifecycle management"""
     global google_patents_pool
     
-    logger.info("🚀 Starting Pharmyrus v4.0.2 (Ultra Simple)...")
+    logger.info("🚀 Starting Pharmyrus v4.0.3-AI-POWERED (Ultra Simple)...")
     
     try:
         from .crawlers.google_patents_pool import GooglePatentsCrawlerPool
@@ -167,9 +176,9 @@ async def lifespan(app: FastAPI):
 # ============================================================================
 
 app = FastAPI(
-    title="Pharmyrus v4.0.2",
+    title="Pharmyrus v4.0.3-AI-POWERED",
     description="Patent Intelligence - Ultra Simple Version",
-    version="4.0.2",
+    version="4.0.3-AI-POWERED",
     lifespan=lifespan
 )
 
@@ -190,7 +199,7 @@ app.add_middleware(
 async def root():
     """Root endpoint"""
     return {
-        "service": "Pharmyrus v4.0.2",
+        "service": "Pharmyrus v4.0.3-AI-POWERED",
         "status": "operational",
         "note": "Ultra Simple - All models inline",
         "endpoints": {
@@ -204,7 +213,7 @@ async def root():
 @app.get("/health", response_model=HealthResponse, tags=["Health"])
 async def health_check():
     """Health check"""
-    return HealthResponse(status="healthy", version="4.0.2")
+    return HealthResponse(status="healthy", version="4.0.3-AI-POWERED")
 
 
 @app.post("/api/v1/patent/{patent_id}", response_model=PatentDetailsResponse, tags=["Patents"])
