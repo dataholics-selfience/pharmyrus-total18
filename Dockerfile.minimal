@@ -1,0 +1,28 @@
+# ALTERNATIVA MINIMALISTA - Se a imagem oficial do Playwright não funcionar
+FROM python:3.11-bookworm
+
+WORKDIR /app
+
+# Install only essential system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    wget \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Install Playwright and Chromium
+RUN playwright install --with-deps chromium
+
+# Copy application
+COPY . .
+
+# Create debug directory
+RUN mkdir -p /tmp/playwright_debug
+
+EXPOSE 8080
+
+CMD ["python", "main.py"]
