@@ -95,17 +95,30 @@ async def root():
 
 @app.get("/health", response_model=HealthResponse, tags=["Status"])
 async def health_check():
+    """
+    Health check simplificado - retorna OK mesmo durante inicialização
+    Railway precisa de resposta rápida
+    """
     services = {
-        "orchestrator": "ready" if orchestrator else "not initialized",
-        "debug_logger": "ready" if debug_logger else "not initialized",
-        "ai_processor": "ready" if ai_processor else "not initialized"
+        "orchestrator": "ready" if orchestrator else "initializing",
+        "debug_logger": "ready" if debug_logger else "initializing",
+        "ai_processor": "ready" if ai_processor else "initializing"
     }
-    all_ready = all(v == "ready" for v in services.values())
+    # Railway healthcheck: retorna 200 sempre, status nos details
     return HealthResponse(
-        status="healthy" if all_ready else "degraded",
+        status="healthy",
         version="5.0.0",
         services=services
     )
+
+@app.get("/ready", tags=["Status"])
+async def readiness_check():
+    """
+    Readiness check - retorna 200 apenas quando tudo está pronto
+    """
+    if not orchestrator or not debug_logger or not ai_processor:
+        raise HTTPException(status_code=503, detail="Services still initializing")
+    return {"status": "ready", "message": "All systems operational"}
 
 @app.post("/api/v1/search", tags=["Search"])
 async def comprehensive_search(request: SearchRequest, background_tasks: BackgroundTasks):

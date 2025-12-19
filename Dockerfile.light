@@ -33,5 +33,5 @@ ENV USE_FIRESTORE=false \
     PORT=8000 \
     LOG_LEVEL=info
 
-# Run with 2 workers
-CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 2 --log-level ${LOG_LEVEL}"]
+# Run with 1 worker (Railway tem pouca memória)
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 1 --log-level ${LOG_LEVEL} --timeout-keep-alive 120"]
