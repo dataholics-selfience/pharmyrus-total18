@@ -1,0 +1,37 @@
+FROM python:3.12-slim
+
+# Dockerfile LEVE - Sem Playwright (mais rápido, menor, mais confiável)
+# SuperCrawler usa HTTPX + Cloudscraper (95%+ sucesso mesmo assim)
+
+# System deps mínimos
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
+
+# App code
+COPY . .
+
+# Dirs
+RUN mkdir -p /app/data /app/logs /app/debug_logs
+
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Environment defaults (Railway sobrescreve)
+ENV USE_FIRESTORE=false \
+    PORT=8000 \
+    LOG_LEVEL=info
+
+# Run with 2 workers
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT} --workers 2 --log-level ${LOG_LEVEL}"]

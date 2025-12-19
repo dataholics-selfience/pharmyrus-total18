@@ -1,7 +1,33 @@
 FROM python:3.12-slim
 
-# System deps
-RUN apt-get update && apt-get install -y gcc g++ curl && rm -rf /var/lib/apt/lists/*
+# System deps (incluindo dependências do Playwright)
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    curl \
+    wget \
+    gnupg \
+    ca-certificates \
+    fonts-liberation \
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libgtk-3-0 \
+    libnspr4 \
+    libnss3 \
+    libwayland-client0 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
+    xvfb \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
@@ -9,8 +35,9 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir --break-system-packages -r requirements.txt
 
-# Playwright
-RUN playwright install chromium && playwright install-deps chromium
+# Playwright (optional - graceful fallback if fails)
+RUN PLAYWRIGHT_BROWSERS_PATH=/app/.playwright playwright install chromium || \
+    echo "⚠️ Playwright install failed - will use HTTPX/Cloudscraper fallback"
 
 # App code
 COPY . .
